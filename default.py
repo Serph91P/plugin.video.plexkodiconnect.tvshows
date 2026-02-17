@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # We need this in order to use add-on paths like
-# 'plugin://plugin.video.plexkodiconnect.MOVIES' in the Kodi video database
+# 'plugin://plugin.video.plexkodiconnect.TVSHOWS' in the Kodi video database
 ###############################################################################
-from __future__ import absolute_import, division, unicode_literals
 from logging import getLogger
 import sys
 import os
@@ -11,15 +10,15 @@ import xbmc
 import xbmcgui
 import xbmcplugin
 import xbmcaddon
+import xbmcvfs
 
 # Import from the main pkc add-on
 __addon__ = xbmcaddon.Addon(id='plugin.video.plexkodiconnect')
-__temp_path__ = os.path.join(__addon__.getAddonInfo('path').decode('utf-8'), 'resources', 'lib')
-__base__ = xbmc.translatePath(__temp_path__.encode('utf-8')).decode('utf-8')
+__temp_path__ = os.path.join(__addon__.getAddonInfo('path'), 'resources', 'lib')
+__base__ = xbmcvfs.translatePath(__temp_path__)
 sys.path.append(__base__)
 
 import transfer, loghandler
-from tools import unicode_paths
 
 ###############################################################################
 loghandler.config()
@@ -33,7 +32,7 @@ def play():
     """
     Start up playback_starter in main Python thread
     """
-    LOG.debug('Full sys.sys.argv received: %s', sys.argv)
+    LOG.debug('Full sys.argv received: %s', sys.argv)
     # Put the request into the 'queue'
     if not sys.argv[2]:
         # Browsing to a tv show from a tv show info dialog - picked up
@@ -41,10 +40,10 @@ def play():
         xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
     else:
-        request = '%s&handle=%s' % (unicode_paths.decode(sys.argv[2]), HANDLE)
-        if b'resume:true' in sys.argv:
+        request = '%s&handle=%s' % (sys.argv[2], HANDLE)
+        if 'resume:true' in sys.argv:
             request += '&resume=1'
-        elif b'resume:false' in sys.argv:
+        elif 'resume:false' in sys.argv:
             request += '&resume=0'
         transfer.plex_command('PLAY-%s' % request)
     if HANDLE == -1:
