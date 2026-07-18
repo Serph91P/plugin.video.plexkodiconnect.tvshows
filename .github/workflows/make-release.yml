@@ -1,86 +1,164 @@
 name: Make Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'addon.xml'
-      - 'default.py'
+  workflow_dispatch:
+    inputs:
+      validation_run_id:
+        description: Successful Add-on Validations run ID for the exact main commit.
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: write
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Make Release
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-      - name: Checkout Add-on
-        uses: actions/checkout@v4
+      - name: Checkout exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install libxml2-utils xmlstarlet zip
-
-      - name: Get version and check tag
-        id: version
-        run: |
-          version=$(xmlstarlet sel -t -v 'string(/addon/@version)' addon.xml)
-          echo "version=$version" >> $GITHUB_OUTPUT
-
-          if git rev-parse "v$version" >/dev/null 2>&1; then
-            echo "tag_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "tag_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create and push tag
-        if: steps.version.outputs.tag_exists == 'false'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
-
-      - name: Get Changelog
-        if: steps.version.outputs.tag_exists == 'false'
-        id: changelog
-        run: |
-          changes=$(xmlstarlet sel -t -v '//news' -n addon.xml)
-          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "changes<<$EOF" >> $GITHUB_OUTPUT
-          echo "$changes" >> $GITHUB_OUTPUT
-          echo "$EOF" >> $GITHUB_OUTPUT
-
-      - name: Create Zip
-        if: steps.version.outputs.tag_exists == 'false'
-        id: create-zip
-        run: |
-          addon_id=${{ github.event.repository.name }}
-          version=${{ steps.version.outputs.version }}
-          filename=${addon_id}-${version}.zip
-
-          mkdir -p /tmp/build/${addon_id}
-          rsync -av --exclude='.git*' \
-                    --exclude='__pycache__' \
-                    --exclude='*.pyc' \
-                    --exclude='.github' \
-                    ./ /tmp/build/${addon_id}/
-
-          cd /tmp/build
-          zip -r ${GITHUB_WORKSPACE}/${filename} ${addon_id}
-          echo "filename=$filename" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        if: steps.version.outputs.tag_exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          files: ${{ steps.create-zip.outputs.filename }}
-          body: ${{ steps.changelog.outputs.changes }}
+      - name: Validate exact successful main validation run
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          run_id = os.environ["VALIDATION_RUN_ID"]
+          if not run_id.isdecimal() or run_id == "0":
+              raise SystemExit("validation run ID is malformed")
+          response = subprocess.run(
+              [
+                  "gh", "api",
+                  f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          run = json.loads(response.stdout)
+          expected = {
+              "id": int(run_id),
+              "name": "Add-on Validations",
+              "path": ".github/workflows/addon-validations.yml",
+              "head_branch": "main",
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "success",
+          }
+          for field, value in expected.items():
+              if run.get(field) != value:
+                  raise SystemExit(f"validation run {field} mismatch")
+          if run.get("event") not in {"push", "workflow_dispatch"}:
+              raise SystemExit("validation run event is not approved")
+          if os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise SystemExit("release must be dispatched from main")
+          PY
+
+      - name: Download exact validated package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: addon-package
+          path: validated/package
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.validation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact validation evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: validation-evidence
+          path: validated/evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.validation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify validated release identity and bytes
+        id: release
+        env:
+          VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          addon_id = "plugin.video.plexkodiconnect.tvshows"
+          version = ET.parse("addon.xml").getroot().attrib["version"]
+          evidence = json.loads(
+              Path("validated/evidence/validation-evidence.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          required = {
+              "validation_run_id", "candidate_sha", "validation_head_sha",
+              "addon_id", "addon_version", "asset_name", "artifact_sha256",
+              "publication_id",
+          }
+          if not isinstance(evidence, dict) or set(evidence) != required:
+              raise SystemExit("validation evidence has unexpected fields")
+          if evidence["validation_run_id"] != int(os.environ["VALIDATION_RUN_ID"]):
+              raise SystemExit("validation evidence run ID mismatch")
+          if (
+              evidence["candidate_sha"] != os.environ["GITHUB_SHA"]
+              or evidence["validation_head_sha"] != os.environ["GITHUB_SHA"]
+          ):
+              raise SystemExit("validation evidence commit mismatch")
+          if evidence["addon_id"] != addon_id:
+              raise SystemExit("validation evidence add-on ID mismatch")
+          if evidence["addon_version"] != version:
+              raise SystemExit("validation evidence version mismatch")
+          if evidence["publication_id"] != f"{addon_id}@{version}":
+              raise SystemExit("validation evidence publication ID mismatch")
+          asset_name = evidence["asset_name"]
+          if re.fullmatch(r"[a-z0-9._+-]+\.zip", asset_name, re.ASCII) is None:
+              raise SystemExit("validation evidence asset name is malformed")
+          package = Path("validated/package") / asset_name
+          if not package.is_file() or package.is_symlink():
+              raise SystemExit("validated release archive is missing")
+          digest = hashlib.sha256(package.read_bytes()).hexdigest()
+          if digest != evidence["artifact_sha256"]:
+              raise SystemExit("validation evidence archive hash mismatch")
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="ascii") as stream:
+              stream.write(f"version={version}\n")
+              stream.write(f"asset={package}\n")
+          PY
+
+      - name: Create immutable tag and stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.release.outputs.version }}"
+          ref="refs/tags/$tag"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="$ref" \
+            -f sha="$GITHUB_SHA" >/dev/null
+          tagged_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" \
+            --jq '.object.sha')
+          test "$tagged_sha" = "$GITHUB_SHA"
+          gh release create "$tag" \
+            "${{ steps.release.outputs.asset }}" \
+            --verify-tag \
+            --title "$tag" \
+            --notes-file changelog.txt

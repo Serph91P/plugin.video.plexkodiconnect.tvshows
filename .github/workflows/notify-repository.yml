@@ -1,21 +1,106 @@
-name: Notify Repository
+name: Validate and Notify Repository
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
-      - 'LICENSE'
+  workflow_run:
+    workflows: ["Add-on Validations"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
 
 jobs:
-  notify-repository:
+  evidence:
+    name: Read Validation Evidence
+    if: >
+      github.event.workflow_run.conclusion == 'success'
+      && (github.event.workflow_run.event == 'push'
+      || github.event.workflow_run.event == 'workflow_dispatch')
+      && github.event.workflow_run.head_branch == 'develop'
+      && github.event.workflow_run.name == 'Add-on Validations'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      addon_id: ${{ steps.evidence.outputs.addon_id }}
+      addon_version: ${{ steps.evidence.outputs.addon_version }}
+      asset_name: ${{ steps.evidence.outputs.asset_name }}
+      artifact_sha256: ${{ steps.evidence.outputs.artifact_sha256 }}
+      publication_id: ${{ steps.evidence.outputs.publication_id }}
     steps:
-      - name: Trigger repository update
-        uses: peter-evans/repository-dispatch@v3
+      - name: Download exact validation evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          token: ${{ secrets.REPO_DISPATCH_TOKEN }}
-          repository: Serph91P/repository.serph91p
-          event-type: addon-updated
-          client-payload: '{"addon": "plugin.video.plexkodiconnect.tvshows", "ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
+          name: validation-evidence
+          path: evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate evidence identity
+        id: evidence
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("evidence/validation-evidence.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          required = {
+              "validation_run_id", "candidate_sha", "validation_head_sha",
+              "addon_id", "addon_version", "asset_name", "artifact_sha256",
+              "publication_id",
+          }
+          if not isinstance(data, dict) or set(data) != required:
+              raise SystemExit("validation evidence has unexpected fields")
+          if data["validation_run_id"] != int(os.environ["RUN_ID"]):
+              raise SystemExit("validation evidence run ID mismatch")
+          if data["candidate_sha"] != os.environ["HEAD_SHA"] or data["validation_head_sha"] != os.environ["HEAD_SHA"]:
+              raise SystemExit("validation evidence commit mismatch")
+          patterns = {
+              "addon_id": r"[a-z0-9._-]+",
+              "addon_version": r"[0-9]+(?:\.[0-9]+)*(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?",
+              "asset_name": r"[a-z0-9._+-]+\.zip",
+              "artifact_sha256": r"[0-9a-f]{64}",
+              "publication_id": r"[a-z0-9._-]+@[0-9A-Za-z.+-]+",
+          }
+          if data["addon_id"] != "plugin.video.plexkodiconnect.tvshows":
+              raise SystemExit("validation evidence add-on ID mismatch")
+          for key, pattern in patterns.items():
+              value = data[key]
+              if not isinstance(value, str) or re.fullmatch(pattern, value, re.ASCII) is None:
+                  raise SystemExit(f"validation evidence {key} is malformed")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="ascii") as output:
+              for key in patterns:
+                  output.write(f"{key}={data[key]}\n")
+          PY
+
+  notify:
+    name: Notify Repository
+    needs: evidence
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: Serph91P/repository.serph91p/.github/workflows/reusable-notify-repository.yml@d7434c26c4d49d42496154dd58ae78e1da6f49d6
+    with:
+      source_repository: ${{ github.repository }}
+      candidate_sha: ${{ github.event.workflow_run.head_sha }}
+      validation_run_id: ${{ github.event.workflow_run.id }}
+      validation_workflow: Add-on Validations
+      validation_workflow_path: .github/workflows/addon-validations.yml
+      validation_event: ${{ github.event.workflow_run.event }}
+      expected_branch: develop
+      addon_id: ${{ needs.evidence.outputs.addon_id }}
+      addon_version: ${{ needs.evidence.outputs.addon_version }}
+      asset_name: ${{ needs.evidence.outputs.asset_name }}
+      artifact_sha256: ${{ needs.evidence.outputs.artifact_sha256 }}
+      publication_id: ${{ needs.evidence.outputs.publication_id }}
+    secrets:
+      REPO_DISPATCH_TOKEN: ${{ secrets.REPO_DISPATCH_TOKEN }}

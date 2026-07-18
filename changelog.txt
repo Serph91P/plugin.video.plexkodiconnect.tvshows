@@ -1,3 +1,6 @@
+version 5.0.1
+- Publish a deterministic runtime-only package through validated immutable artifacts
+
 version 5.0.0
 - Bumped to match PlexKodiConnect 5.0.0 (Kodi 20+ typed InfoTag API)
 - No functional changes to tvshows helper add-on; trampoline API unchanged
