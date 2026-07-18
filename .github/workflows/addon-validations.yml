@@ -3,32 +3,38 @@ name: Add-on Validations
 on:
   push:
     branches: [main, develop]
-
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  addon-validations:
-    name: Add-on Validations
+  test:
+    name: Publication Contract Tests
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Checkout Add-on
-        uses: actions/checkout@v4
-        with:
-          path: ${{ github.event.repository.name }}
+      - name: Run publication contract tests
+        run: python -m unittest discover -s tests -p 'test*.py' -v
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install git+https://github.com/xbmc/addon-check.git
-
-      - name: Kodi Add-on Checker (Omega)
-        id: kodi-addon-checker
-        run: |
-          kodi-addon-checker ${{ github.event.repository.name }} --branch=omega
+  package:
+    name: Package Validation
+    needs: test
+    uses: Serph91P/repository.serph91p/.github/workflows/reusable-addon-package.yml@e0c07e492599658d2ecaf0a188de09b2abdb6375
+    with:
+      addon_id: plugin.video.plexkodiconnect.tvshows
+      runtime_entries_json: '["addon.xml","changelog.txt","default.py","icon.png"]'
