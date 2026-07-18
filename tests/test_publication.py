@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ADDON_ID = "plugin.video.plexkodiconnect.tvshows"
 EXPECTED_MEMBERS = {f"{ADDON_ID}/{name}" for name in ("addon.xml", "changelog.txt", "default.py", "icon.png")}
 PACKAGE_SHA = "e0c07e492599658d2ecaf0a188de09b2abdb6375"
-NOTIFIER_SHA = "51c044b2172e6a1c275b0816dd017430140e9f5f"
+NOTIFIER_SHA = "d7434c26c4d49d42496154dd58ae78e1da6f49d6"
 
 
 class PublicationContractTests(unittest.TestCase):
@@ -59,6 +59,11 @@ class PublicationContractTests(unittest.TestCase):
         self.assertIn("workflow_run:", notifier)
         self.assertIn("workflow_dispatch", notifier)
         self.assertIn("validation_event: ${{ github.event.workflow_run.event }}", notifier)
+        self.assertIn(
+            "validation_workflow_path: .github/workflows/addon-validations.yml",
+            notifier,
+        )
+        self.assertNotIn("addon-validations.yml@develop", notifier)
         self.assertIn("head_branch == 'develop'", notifier)
         self.assertNotIn("addon-updated", notifier)
         combined = validations + notifier + release
