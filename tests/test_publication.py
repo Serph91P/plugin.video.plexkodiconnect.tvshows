@@ -8,7 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ADDON_ID = "plugin.video.plexkodiconnect.tvshows"
 EXPECTED_MEMBERS = {f"{ADDON_ID}/{name}" for name in ("addon.xml", "changelog.txt", "default.py", "icon.png")}
-TOOLING_SHA = "e0c07e492599658d2ecaf0a188de09b2abdb6375"
+PACKAGE_SHA = "e0c07e492599658d2ecaf0a188de09b2abdb6375"
+NOTIFIER_SHA = "51c044b2172e6a1c275b0816dd017430140e9f5f"
 
 
 class PublicationContractTests(unittest.TestCase):
@@ -52,9 +53,12 @@ class PublicationContractTests(unittest.TestCase):
         validations = (ROOT / ".github/workflows/addon-validations.yml").read_text()
         notifier = (ROOT / ".github/workflows/notify-repository.yml").read_text()
         release = (ROOT / ".github/workflows/make-release.yml").read_text()
-        self.assertIn(f"reusable-addon-package.yml@{TOOLING_SHA}", validations)
-        self.assertIn(f"reusable-notify-repository.yml@{TOOLING_SHA}", notifier)
+        self.assertIn(f"reusable-addon-package.yml@{PACKAGE_SHA}", validations)
+        self.assertIn(f"reusable-notify-repository.yml@{NOTIFIER_SHA}", notifier)
+        self.assertIn("workflow_dispatch:", validations)
         self.assertIn("workflow_run:", notifier)
+        self.assertIn("workflow_dispatch", notifier)
+        self.assertIn("validation_event: ${{ github.event.workflow_run.event }}", notifier)
         self.assertIn("head_branch == 'develop'", notifier)
         self.assertNotIn("addon-updated", notifier)
         combined = validations + notifier + release
