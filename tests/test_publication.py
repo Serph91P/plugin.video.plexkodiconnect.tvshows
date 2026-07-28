@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ADDON_ID = "plugin.video.plexkodiconnect.tvshows"
 EXPECTED_MEMBERS = {f"{ADDON_ID}/{name}" for name in ("addon.xml", "changelog.txt", "default.py", "icon.png")}
 PACKAGE_SHA = "e0c07e492599658d2ecaf0a188de09b2abdb6375"
-NOTIFIER_SHA = "a1730e889acf1816fd6d8c856c10b9ce97747829"
+NOTIFIER_SHA = "394c4ffcef574a602a7c640565b5d6f705e9a16d"
 
 
 class PublicationContractTests(unittest.TestCase):
